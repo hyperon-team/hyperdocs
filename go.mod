@@ -1,4 +1,4 @@
-module github.com/hyperon-team/hyperdocs
+module hyperdocs
 
 go 1.15
 

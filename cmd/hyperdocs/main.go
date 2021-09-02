@@ -13,7 +13,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/joho/godotenv"
 
-	discordgoutil "github.com/hyperon-team/hyperdocs/pkg/discordgo"
+	discordgoutil "hyperdocs/pkg/discordgo"
 )
 
 var (
