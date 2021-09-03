@@ -140,6 +140,8 @@ func renderParagraph(node *ast.Paragraph) (res string) {
 			res += "_" + string(ast.GetFirstChild(v).AsLeaf().Literal) + "_"
 		case *ast.Strong:
 			res += "**" + string(ast.GetFirstChild(v).AsLeaf().Literal) + "**"
+		case *ast.Code:
+			res += renderCode(v)
 		default:
 			return ast.GoToNext
 		}
@@ -151,6 +153,38 @@ func renderParagraph(node *ast.Paragraph) (res string) {
 
 func renderCodeBlock(node *ast.CodeBlock) (res string) {
 	return fmt.Sprintf("```%s\n%s\n```", node.Info, node.Literal)
+}
+
+func renderCode(node *ast.Code) (res string) {
+	return fmt.Sprintf("`%s`", node.Literal)
+}
+
+func renderDiscordBlockQuote(node *ast.BlockQuote) (res string) {
+	switch v := ast.GetFirstChild(node).(type) {
+	case *ast.Paragraph:
+		kind := string(ast.GetFirstChild(v).AsLeaf().Literal)
+		split := strings.Split(kind, "\n")
+		kind = split[0]
+
+		kindEmoji := ""
+		switch kind {
+		case "danger":
+			kindEmoji = ":octagonal_sign:"
+		case "warn":
+			kindEmoji = ":warning:"
+		case "info":
+			kindEmoji = ":information_source:"
+		}
+		if len(split) > 1 {
+			v.Children[0].AsLeaf().Literal = []byte(split[1])
+		} else {
+			v.Children = v.Children[1:]
+		}
+		res = "[" + kindEmoji + "] " + renderParagraph(v)
+	case *ast.CodeBlock:
+		res = renderCodeBlock(v)
+	}
+	return "> " + res
 }
 
 func formatDiscordUrlParameter(param string) string {
@@ -211,6 +245,8 @@ stopCollecting:
 			rendered += renderParagraph(v)
 		case *ast.CodeBlock:
 			rendered += renderCodeBlock(v)
+		case *ast.BlockQuote:
+			rendered += renderDiscordBlockQuote(v)
 		default:
 			break stopCollecting
 		}
