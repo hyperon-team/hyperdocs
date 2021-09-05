@@ -14,6 +14,7 @@ import (
 	"github.com/gomarkdown/markdown/parser"
 
 	discordgoutil "hyperdocs/pkg/discordgo"
+	mdutil "hyperdocs/pkg/markdown"
 )
 
 var (
@@ -124,69 +125,6 @@ func (f *Visitor) Visit(node ast.Node, entering bool) ast.WalkStatus {
 	return ast.GoToNext
 }
 
-func renderParagraph(node *ast.Paragraph) (res string) {
-	if node == nil {
-		return ""
-	}
-
-	ast.Walk(node, ast.NodeVisitorFunc(func(node ast.Node, entering bool) ast.WalkStatus {
-		if !entering {
-			return ast.GoToNext
-		}
-		switch v := node.(type) {
-		case *ast.Text:
-			res += string(v.Literal)
-		case *ast.Emph:
-			res += "_" + string(ast.GetFirstChild(v).AsLeaf().Literal) + "_"
-		case *ast.Strong:
-			res += "**" + string(ast.GetFirstChild(v).AsLeaf().Literal) + "**"
-		case *ast.Code:
-			res += renderCode(v)
-		default:
-			return ast.GoToNext
-		}
-		return ast.SkipChildren
-	}))
-
-	return
-}
-
-func renderCodeBlock(node *ast.CodeBlock) (res string) {
-	return fmt.Sprintf("```%s\n%s\n```", node.Info, node.Literal)
-}
-
-func renderCode(node *ast.Code) (res string) {
-	return fmt.Sprintf("`%s`", node.Literal)
-}
-
-func renderDiscordBlockQuote(node *ast.BlockQuote) (res string) {
-	switch v := ast.GetFirstChild(node).(type) {
-	case *ast.Paragraph:
-		kind := string(ast.GetFirstChild(v).AsLeaf().Literal)
-		split := strings.Split(kind, "\n")
-		kind = split[0]
-
-		kindEmoji := ""
-		switch kind {
-		case "danger":
-			kindEmoji = ":octagonal_sign:"
-		case "warn":
-			kindEmoji = ":warning:"
-		case "info":
-			kindEmoji = ":information_source:"
-		}
-		if len(split) > 1 {
-			v.Children[0].AsLeaf().Literal = []byte(split[1])
-		} else {
-			v.Children = v.Children[1:]
-		}
-		res = "[" + kindEmoji + "] " + renderParagraph(v)
-	case *ast.CodeBlock:
-		res = renderCodeBlock(v)
-	}
-	return "> " + res
-}
-
 func formatDiscordUrlParameter(param string) string {
 	return strings.ReplaceAll(strings.ToLower(param), " ", "-")
 }
@@ -240,17 +178,21 @@ func (d Discord) Search(ctx context.Context, s *discordgo.Session, i *discordgo.
 	var rendered string
 stopCollecting:
 	for current != nil {
+		var result string
 		switch v := current.(type) {
-		case *ast.Paragraph:
-			rendered += renderParagraph(v)
-		case *ast.CodeBlock:
-			rendered += renderCodeBlock(v)
 		case *ast.BlockQuote:
-			rendered += renderDiscordBlockQuote(v)
+			result = mdutil.RenderHintNode(v, mdutil.HintKindMapping{
+				"info":   ":information_source:",
+				"warn":   ":warning:",
+				"danger": ":octagonal_sign:",
+			})
 		default:
-			break stopCollecting
+			result = mdutil.RenderStringNode(current)
+			if result == "" {
+				break stopCollecting
+			}
 		}
-		rendered += "\n\n"
+		rendered += result + "\n\n"
 		current = ast.GetNextNode(current)
 	}
 
