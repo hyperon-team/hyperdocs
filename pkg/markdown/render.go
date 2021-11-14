@@ -113,7 +113,11 @@ func RenderStringNode(node ast.Node) string {
 	case *ast.CodeBlock:
 		return RenderCodeBlockNode(v)
 	case *ast.BlockQuote:
-		return RenderBlockQuoteNode(v)
+		return RenderHintNode(v, HintKindMapping{
+			"info":   ":information_source:",
+			"warn":   ":warning:",
+			"danger": ":octagonal_sign:",
+		})
 	}
 	return ""
 }

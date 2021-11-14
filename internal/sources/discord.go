@@ -2,22 +2,28 @@ package sources
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"path"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/go-redis/redis/v8"
 	"github.com/gomarkdown/markdown"
 	"github.com/gomarkdown/markdown/ast"
 	"github.com/gomarkdown/markdown/parser"
 
+	"hyperdocs/config"
 	discordgoutil "hyperdocs/pkg/discordgo"
 	mdutil "hyperdocs/pkg/markdown"
 )
 
 var (
+	discordDocsRepo     = "discord/discord-api-docs"
 	discordDocsRepoURL  = "https://raw.githubusercontent.com/discord/discord-api-docs"
 	discordDocsBranch   = "master"
 	discordDocsFilesURL = discordDocsRepoURL + "/" + discordDocsBranch + "/docs"
@@ -27,9 +33,14 @@ var (
 	discordDocsHeadingURL = func(topic, page, heading string) string {
 		return discordDocsURL + "/" + topic + "/" + page + "#" + heading
 	}
+
+	discordDocsCacheKey = "discord.sources"
 )
 
-type Discord struct{}
+type Discord struct {
+	Config config.Config
+	Cache  *redis.Client
+}
 
 // Name of the resource. It is being used as the source command name
 func (d Discord) Name() string {
@@ -71,6 +82,8 @@ func (d Discord) Process(ctx context.Context, s *discordgo.Session, i *discordgo
 
 type Visitor struct {
 	LiteralTarget string
+	LiteralPrefix string
+	LiteralSuffix string
 
 	ResultNode ast.Node
 }
@@ -109,15 +122,17 @@ func printNode(node ast.Node, nesting int) {
 }
 
 func (f *Visitor) Visit(node ast.Node, entering bool) ast.WalkStatus {
-	var literal []byte
+	var literal string
 
 	if leaf := node.AsLeaf(); leaf != nil {
-		literal = leaf.Literal
+		literal = string(leaf.Literal)
 	} else if container := node.AsContainer(); container != nil {
-		literal = container.Literal
+		literal = string(container.Literal)
 	}
 
-	if string(literal) == f.LiteralTarget {
+	if (f.LiteralTarget != "" && literal == f.LiteralTarget) ||
+		(f.LiteralPrefix != "" && strings.HasPrefix(literal, f.LiteralPrefix)) ||
+		(f.LiteralSuffix != "" && strings.HasSuffix(literal, f.LiteralSuffix)) {
 		f.ResultNode = node
 		return ast.SkipChildren
 	}
@@ -125,7 +140,71 @@ func (f *Visitor) Visit(node ast.Node, entering bool) ast.WalkStatus {
 	return ast.GoToNext
 }
 
-func formatDiscordUrlParameter(param string) string {
+var referenceLinkRegex = regexp.MustCompile(`(?:([\w.]+)(#[\w\-\/:]+))`)
+
+func (discord *Discord) resolveDiscordMarkdownReferences(ref string) string {
+	if strings.HasPrefix(ref, "#DOCS") {
+		// TODO: fallback situation (hitting ratelimits when cache provider is down)
+		if v, err := discord.Cache.Exists(context.TODO(), discordDocsCacheKey).Result(); err != nil || v == 0 {
+			resp, err := http.Get("https://api.github.com/repos/" + discordDocsRepo + "/git/trees/" + discordDocsBranch + "?recursive=1")
+			if err != nil { // TODO: proper error handling
+				fmt.Println(err)
+				return "https://discord.com/developers/docs/intro"
+			}
+			var payload struct {
+				Tree []struct {
+					Path string `json:"path"`
+				} `json:"tree"`
+			}
+			err = json.NewDecoder(resp.Body).Decode(&payload)
+			if err != nil { // TODO: proper error handling
+				fmt.Println(err)
+				return "https://discord.com/developers/docs/intro"
+			}
+
+			for _, item := range payload.Tree {
+				item.Path = strings.TrimSuffix(item.Path, ".md")
+				discord.Cache.HSet(
+					context.TODO(),
+					discordDocsCacheKey,
+					strings.ReplaceAll(strings.ToUpper(item.Path), "/", "_"),
+					item.Path,
+				)
+			}
+
+			discord.Cache.Expire(
+				context.TODO(),
+				discordDocsCacheKey,
+				time.Duration(time.Duration(discord.Config.Sources.Discord.SourceCacheTTL)*time.Second),
+			)
+		}
+
+		ref = strings.TrimPrefix(ref, "#")
+		pathSegments := strings.Split(ref, "/")
+		path, err := discord.Cache.HGet(context.TODO(), discordDocsCacheKey, pathSegments[0]).Result()
+		if err != nil { // TODO: proper error handling
+			fmt.Println(err)
+			return "https://discord.com/developers/docs/intro"
+		}
+		return strings.ToLower("https://discord.com/developers/" + path + "#" + pathSegments[1])
+		// pathSegments[2] = strings.SplitAfter strings.ReplaceAll(strings.Title(strings.ToLower(pathSegments[2]), "And", "and"),
+	}
+	return ref
+}
+
+func (discord *Discord) encodeMDReferenceLinks(src string) string {
+	// split := strings.SplitN(referenceLinkRegex.FindStringSubmatch(src)[2], "_", 2)[1:]
+	// split[0]
+	res := referenceLinkRegex.ReplaceAllStringFunc(src, func(s string) string {
+		submatches := referenceLinkRegex.FindStringSubmatch(s)
+
+		return fmt.Sprintf("[%s](%s)", submatches[1], discord.resolveDiscordMarkdownReferences(submatches[2]))
+	})
+	// res := referenceLinkRegex.ReplaceAllString(src, "[${1}](${2})")
+	return res
+}
+
+func normalizeDiscordUrlParameter(param string) string {
 	return strings.ReplaceAll(strings.ToLower(param), " ", "-")
 }
 
@@ -160,9 +239,9 @@ func (d Discord) Search(ctx context.Context, s *discordgo.Session, i *discordgo.
 	}
 
 	parsed := markdown.Parse(body, parser.NewWithExtensions(parser.CommonExtensions|parser.AutoHeadingIDs))
-	visitor := &Visitor{LiteralTarget: options["paragraph-name"].StringValue()}
-	ast.Walk(parsed, visitor)
 
+	visitor := &Visitor{LiteralPrefix: options["paragraph-name"].StringValue()}
+	ast.Walk(parsed, visitor)
 	top := visitor.ResultNode
 
 	if top == nil {
@@ -171,6 +250,45 @@ func (d Discord) Search(ctx context.Context, s *discordgo.Session, i *discordgo.
 
 	if top.GetParent() != nil {
 		top = top.GetParent()
+	}
+
+	if split := strings.Split(string(visitor.ResultNode.AsLeaf().Literal), "%"); len(split) > 1 {
+		split[0] = strings.TrimSpace(split[0])
+		split[1] = strings.TrimSpace(split[1])
+		endpointSignature := strings.Split(split[1], " ")
+		var rendered string
+		current := ast.GetNextNode(visitor.ResultNode.GetParent())
+	stopCollectingAPIMethod:
+		for current != nil {
+			var result string
+			switch v := current.(type) {
+			case *ast.BlockQuote:
+				result = mdutil.RenderHintNode(v, mdutil.HintKindMapping{
+					"info":   ":information_source:",
+					"warn":   ":warning:",
+					"danger": ":octagonal_sign:",
+				})
+			default:
+				result = mdutil.RenderStringNode(current)
+				if result == "" {
+					break stopCollectingAPIMethod
+				}
+			}
+			rendered += result + "\n\n"
+			current = ast.GetNextNode(current)
+		}
+
+		return APIEndpoint{
+			Name:        strings.TrimSpace(split[0]),
+			Description: rendered,
+			Method:      strings.ToUpper(endpointSignature[0]),
+			Endpoint:    d.encodeMDReferenceLinks(endpointSignature[1]),
+			Link: discordDocsHeadingURL(
+				normalizeDiscordUrlParameter(options["topic"].StringValue()),
+				normalizeDiscordUrlParameter(options["page"].StringValue()),
+				normalizeDiscordUrlParameter(strings.ToLower(strings.ReplaceAll(split[0], " ", "-"))),
+			),
+		}, nil
 	}
 
 	current := ast.GetNextNode(top)
@@ -200,9 +318,21 @@ stopCollecting:
 		Content: rendered,
 		Title:   string(ast.GetFirstChild(visitor.ResultNode.GetParent()).AsLeaf().Literal),
 		Source: discordDocsHeadingURL(
-			formatDiscordUrlParameter(options["topic"].StringValue()),
-			formatDiscordUrlParameter(options["page"].StringValue()),
-			formatDiscordUrlParameter((visitor.ResultNode.GetParent().(*ast.Heading)).HeadingID),
+			normalizeDiscordUrlParameter(options["topic"].StringValue()),
+			normalizeDiscordUrlParameter(options["page"].StringValue()),
+			normalizeDiscordUrlParameter((visitor.ResultNode.GetParent().(*ast.Heading)).HeadingID),
 		),
 	}, nil
+}
+
+func NewDiscord(cfg config.Config) *Discord {
+	client := redis.NewClient(&redis.Options{
+		Addr:     cfg.Cache.Addr,
+		Password: cfg.Cache.Password,
+		DB:       cfg.Cache.DB,
+	})
+	return &Discord{
+		Config: cfg,
+		Cache:  client,
+	}
 }

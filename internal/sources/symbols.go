@@ -1,6 +1,8 @@
 package sources
 
 import (
+	"fmt"
+
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -14,8 +16,8 @@ const (
 	SymbolInterface
 	// SymbolFunction indicates that the symbol is a function/method.
 	SymbolFunction
-	// SymbolAPIMethod indicates that the symbol is API endpoint.
-	SymbolAPIMethod
+	// SymbolAPIEndpoint indicates that the symbol is API endpoint.
+	SymbolAPIEndpoint
 	// SymbolParagraph indicates that the symbol is a simple text paragraph (in markdown for example).
 	SymbolParagraph
 )
@@ -46,7 +48,36 @@ type Function struct {
 	Childs     []Symbol
 }
 
-type APIMethod struct{}
+type APIEndpointParameter struct {
+	Name        string
+	Type        string
+	Description string
+}
+
+type APIEndpoint struct {
+	Name        string
+	Link        string
+	Method      string
+	Endpoint    string
+	Parameters  []APIEndpointParameter
+	Description string
+}
+
+func (e APIEndpoint) GetName() string {
+	return e.Name
+}
+
+func (e APIEndpoint) GetLink() string {
+	return e.Link
+}
+
+func (e APIEndpoint) Type() SymbolType {
+	return SymbolAPIEndpoint
+}
+
+func (e APIEndpoint) Render() (desc string, fields []*discordgo.MessageEmbedField) {
+	return fmt.Sprintf("**%s** %q\n\n%s", e.Method, e.Endpoint, e.Description), nil
+}
 
 type Paragraph struct {
 	Title        string

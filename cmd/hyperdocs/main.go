@@ -10,6 +10,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/joho/godotenv"
 
+	"hyperdocs/config"
 	"hyperdocs/internal/sources"
 	discordgoutil "hyperdocs/pkg/discordgo"
 )
@@ -28,11 +29,9 @@ var (
 
 var discordDocTmpl = `https://discord.dev/{{ .topic.Value }}/{{ .page.Value }}{{ with $x := (index . "paragraph-id").Value }}#{{ $x }}{{ end }}`
 
-func registerCommands(session *discordgo.Session, commands []*discordgo.ApplicationCommand) {
-	guild := os.Getenv("DISCORD_GUILD")
-	app := os.Getenv("DISCORD_ID")
+func registerCommands(cfg config.Config, session *discordgo.Session, commands []*discordgo.ApplicationCommand) {
 	for _, cmd := range commands {
-		_, err := session.ApplicationCommandCreate(app, guild, cmd)
+		_, err := session.ApplicationCommandCreate(cfg.DiscordID, cfg.TestingGuild, cmd)
 		if err != nil {
 			log.Fatal(fmt.Errorf("cannot register %q command: %w", cmd.Name, err))
 		}
@@ -54,20 +53,40 @@ func awaitForInterrupt() {
 
 func main() {
 	fmt.Println(banner)
-	session, err := discordgo.New("Bot " + os.Getenv("DISCORD_TOKEN"))
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal(fmt.Errorf("cannot load configuration: %w", err))
+	}
+	session, err := discordgo.New("Bot " + cfg.Token)
 	if err != nil {
 		panic(fmt.Errorf("cannot construct session: %w", err))
 	}
+	sourcesList := sources.Sources(cfg)
 
-	registerCommands(session, []*discordgo.ApplicationCommand{
+	registerCommands(cfg, session, []*discordgo.ApplicationCommand{
 		{
 			Name:        "docs",
 			Description: "Open sesame the documentation vault.",
-			Options:     optionsFromSourceList(sources.Sources),
+			Options:     optionsFromSourceList(sourcesList),
+		},
+		{
+			Name:        "invite",
+			Description: "Invite the bot",
 		},
 	})
 
-	session.AddHandler(discordgoutil.NewCommandHandler(makeHandlersMap(sources.Sources)))
+	session.AddHandler(discordgoutil.NewCommandHandler(makeHandlersMap(sourcesList)))
+	session.AddHandler(discordgoutil.NewCommandHandler(map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){
+		"invite": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Flags:   1 << 6,
+					Content: fmt.Sprintf(`To invite me - click [here](https://discord.com/api/oauth2/authorize?client_id=%s&permissions=378944&scope=bot+applications.commands)`, s.State.User.ID),
+				},
+			})
+		},
+	}))
 	session.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
 		log.Println("Bot is up!")
 	})

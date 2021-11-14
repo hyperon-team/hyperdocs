@@ -2,6 +2,7 @@ package sources
 
 import (
 	"context"
+	"hyperdocs/config"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -21,7 +22,9 @@ type Source interface {
 	Search(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) (Symbol, error)
 }
 
-// SourcesList is a map of supported all documentation sources
-var Sources = []Source{
-	Discord{},
+// Sources returns a map of all supported documentation sources
+func Sources(cfg config.Config) []Source {
+	return []Source{
+		NewDiscord(cfg),
+	}
 }
