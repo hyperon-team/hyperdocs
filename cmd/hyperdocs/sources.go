@@ -45,7 +45,10 @@ func makeInteractionHandler(src sources.Source) func(s *discordgo.Session, i *di
 				fmt.Println(err)
 			}
 			return
+		} else if err != nil {
+			fmt.Println(err)
 		}
+
 		desc, fields := symbol.Render()
 		err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
