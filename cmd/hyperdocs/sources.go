@@ -56,7 +56,7 @@ func makeInteractionHandler(src sources.Source) func(s *discordgo.Session, i *di
 						URL:         symbol.GetLink(),
 						Description: desc,
 						Fields:      fields,
-						Color:       0x0F0D0D,
+						Color:       0x4b9ac6,
 					},
 				},
 			},
