@@ -175,7 +175,7 @@ func (discord *Discord) resolveDiscordMarkdownReferences(ref string) string {
 			discord.Cache.Expire(
 				context.TODO(),
 				discordDocsCacheKey,
-				time.Duration(time.Duration(discord.Config.Sources.Discord.SourceCacheTTL)*time.Second),
+				time.Duration(time.Duration(discord.Config.Sources.Discord.RedisTTL)*time.Second),
 			)
 		}
 
@@ -325,14 +325,9 @@ stopCollecting:
 	}, nil
 }
 
-func NewDiscord(cfg config.Config) *Discord {
-	client := redis.NewClient(&redis.Options{
-		Addr:     cfg.Cache.Addr,
-		Password: cfg.Cache.Password,
-		DB:       cfg.Cache.DB,
-	})
+func NewDiscord(cfg config.Config, redisClient *redis.Client) Source {
 	return &Discord{
 		Config: cfg,
-		Cache:  client,
+		Cache:  redisClient,
 	}
 }

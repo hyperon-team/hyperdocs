@@ -5,6 +5,7 @@ import (
 	"hyperdocs/config"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/go-redis/redis/v8"
 )
 
 // Source is the representation of a single documentation source.
@@ -22,9 +23,15 @@ type Source interface {
 	Search(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) (Symbol, error)
 }
 
+// Sources is a list of constructors for of all supported documentation sources
+var SourcesRaw = []func(config.Config, *redis.Client) Source{
+	NewDiscord,
+}
+
 // Sources returns a map of all supported documentation sources
-func Sources(cfg config.Config) []Source {
-	return []Source{
-		NewDiscord(cfg),
+func Sources(cfg config.Config, redisClient *redis.Client) (r []Source) {
+	for _, s := range SourcesRaw {
+		r = append(r, s(cfg, redisClient))
 	}
+	return
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/go-redis/redis/v8"
 	"github.com/joho/godotenv"
 
 	"hyperdocs/config"
@@ -31,7 +33,7 @@ var discordDocTmpl = `https://discord.dev/{{ .topic.Value }}/{{ .page.Value }}{{
 
 func registerCommands(cfg config.Config, session *discordgo.Session, commands []*discordgo.ApplicationCommand) {
 	for _, cmd := range commands {
-		_, err := session.ApplicationCommandCreate(cfg.DiscordID, cfg.TestingGuild, cmd)
+		_, err := session.ApplicationCommandCreate(cfg.AppID, cfg.TestingGuild, cmd)
 		if err != nil {
 			log.Fatal(fmt.Errorf("cannot register %q command: %w", cmd.Name, err))
 		}
@@ -40,7 +42,7 @@ func registerCommands(cfg config.Config, session *discordgo.Session, commands []
 
 func init() {
 	err := godotenv.Load()
-	if err != nil {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Fatal(fmt.Errorf("cannot load env file: %w", err))
 	}
 }
@@ -59,9 +61,14 @@ func main() {
 	}
 	session, err := discordgo.New("Bot " + cfg.Token)
 	if err != nil {
-		panic(fmt.Errorf("cannot construct session: %w", err))
+		log.Fatal(fmt.Errorf("cannot construct session: %w", err))
 	}
-	sourcesList := sources.Sources(cfg)
+	redisOpts, err := redis.ParseURL(cfg.Redis)
+	if err != nil {
+		log.Fatal(fmt.Errorf("cannot parse redis url: %w", err))
+	}
+
+	sourcesList := sources.Sources(cfg, redis.NewClient(redisOpts))
 
 	registerCommands(cfg, session, []*discordgo.ApplicationCommand{
 		{
