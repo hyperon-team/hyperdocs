@@ -109,7 +109,7 @@ func RenderHintNode(node *ast.BlockQuote, kindMappings HintKindMapping) (res str
 func RenderStringNode(node ast.Node) string {
 	switch v := node.(type) {
 	case *ast.Paragraph:
-		return RenderParagraphNode(v)
+		return RenderTextNode(v)
 	case *ast.CodeBlock:
 		return RenderCodeBlockNode(v)
 	case *ast.BlockQuote:
