@@ -27,8 +27,8 @@ func RenderCodeBlockNode(node *ast.CodeBlock) string {
 	return RenderCodeBlock(string(node.Info), string(node.Literal))
 }
 
-// RenderParagraphNode renders *ast.Paragraph node into a string.
-func RenderParagraphNode(node *ast.Paragraph) (result string) {
+// RenderTextNode renders a text node into a string.
+func RenderTextNode(node ast.Node) (result string) {
 	if node == nil {
 		return ""
 	}
@@ -69,7 +69,7 @@ func RenderBlockQuote(content string, multiline bool) string {
 func RenderBlockQuoteNode(node *ast.BlockQuote) (res string) {
 	switch v := ast.GetFirstChild(node).(type) {
 	case *ast.Paragraph:
-		res = RenderParagraphNode(v)
+		res = RenderTextNode(v)
 	case *ast.CodeBlock:
 		res = RenderCodeBlockNode(v)
 	}
