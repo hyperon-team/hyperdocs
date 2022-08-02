@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,6 +10,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/go-redis/redis/v8"
 	"github.com/joho/godotenv"
+	log "github.com/sirupsen/logrus"
 
 	"hyperdocs/config"
 	"hyperdocs/internal/sources"
@@ -45,6 +45,8 @@ func init() {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Fatal(fmt.Errorf("cannot load env file: %w", err))
 	}
+
+	log.SetReportCaller(true)
 }
 
 func awaitForInterrupt() {

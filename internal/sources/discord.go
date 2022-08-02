@@ -16,6 +16,7 @@ import (
 	"github.com/gomarkdown/markdown"
 	"github.com/gomarkdown/markdown/ast"
 	"github.com/gomarkdown/markdown/parser"
+	log "github.com/sirupsen/logrus"
 
 	"hyperdocs/config"
 	discordgoutil "hyperdocs/pkg/discordgo"
@@ -23,9 +24,10 @@ import (
 )
 
 var (
-	discordDocsRepo     = "discord/discord-api-docs"
-	discordDocsRepoURL  = "https://raw.githubusercontent.com/discord/discord-api-docs"
-	discordDocsBranch   = "master"
+	discordDocsRepo    = "discord/discord-api-docs"
+	discordDocsRepoURL = "https://raw.githubusercontent.com/discord/discord-api-docs"
+	// discordDocsBranch   = "master"
+	discordDocsBranch   = "main"
 	discordDocsFilesURL = discordDocsRepoURL + "/" + discordDocsBranch + "/docs"
 	discordDocsFileURL  = func(filepath string) string { return discordDocsFilesURL + "/" + filepath }
 
@@ -148,7 +150,7 @@ func (discord *Discord) resolveDiscordMarkdownReferences(ref string) string {
 		if v, err := discord.Cache.Exists(context.TODO(), discordDocsCacheKey).Result(); err != nil || v == 0 {
 			resp, err := http.Get("https://api.github.com/repos/" + discordDocsRepo + "/git/trees/" + discordDocsBranch + "?recursive=1")
 			if err != nil { // TODO: proper error handling
-				fmt.Println(err)
+				log.Println(err)
 				return "https://discord.com/developers/docs/intro"
 			}
 			var payload struct {
@@ -158,18 +160,21 @@ func (discord *Discord) resolveDiscordMarkdownReferences(ref string) string {
 			}
 			err = json.NewDecoder(resp.Body).Decode(&payload)
 			if err != nil { // TODO: proper error handling
-				fmt.Println(err)
+				log.Println(err)
 				return "https://discord.com/developers/docs/intro"
 			}
 
 			for _, item := range payload.Tree {
 				item.Path = strings.TrimSuffix(item.Path, ".md")
-				discord.Cache.HSet(
+				res := discord.Cache.HSet(
 					context.TODO(),
 					discordDocsCacheKey,
 					strings.ReplaceAll(strings.ToUpper(item.Path), "/", "_"),
 					item.Path,
 				)
+				if res.Err() != nil {
+					log.Println(fmt.Errorf("cannot cache %s: %w", item, res.Err()))
+				}
 			}
 
 			discord.Cache.Expire(
@@ -177,13 +182,16 @@ func (discord *Discord) resolveDiscordMarkdownReferences(ref string) string {
 				discordDocsCacheKey,
 				time.Duration(time.Duration(discord.Config.Sources.Discord.RedisTTL)*time.Second),
 			)
+		} else if err != nil {
+			log.Println(err)
+			return "https://discord.com/developers/docs/intro"
 		}
 
 		ref = strings.TrimPrefix(ref, "#")
 		pathSegments := strings.Split(ref, "/")
 		path, err := discord.Cache.HGet(context.TODO(), discordDocsCacheKey, pathSegments[0]).Result()
 		if err != nil { // TODO: proper error handling
-			fmt.Println(err)
+			log.Println(err)
 			return "https://discord.com/developers/docs/intro"
 		}
 		return strings.ToLower("https://discord.com/developers/" + path + "#" + pathSegments[1])
@@ -206,6 +214,34 @@ func (discord *Discord) encodeMDReferenceLinks(src string) string {
 
 func normalizeDiscordUrlParameter(param string) string {
 	return strings.ReplaceAll(strings.ToLower(param), " ", "-")
+}
+
+func parseEndpointParams(table *ast.Table) (params []APIEndpointParameter) {
+	header := []string{}
+	for _, v := range ast.GetFirstChild(ast.GetFirstChild(table)).GetChildren() {
+		header = append(header, string(ast.GetFirstChild(v).AsLeaf().Literal))
+	}
+	rows := table.GetChildren()[1].GetChildren()
+	for _, row := range rows {
+		param := APIEndpointParameter{
+			Additional: make(map[string]string),
+		}
+		children := row.GetChildren()
+		for idx, col := range header {
+			switch strings.ToLower(col) {
+			case "field":
+				param.Name = mdutil.RenderTextNode(children[idx])
+			case "description":
+				param.Description = mdutil.RenderTextNode(children[idx])
+			case "type":
+				param.Type = mdutil.RenderTextNode(children[idx])
+			default:
+				param.Additional[col] = mdutil.RenderTextNode(children[idx])
+			}
+		}
+		params = append(params, param)
+	}
+	return
 }
 
 // Search processes the input and returns the symbol by specified parameters.
@@ -256,6 +292,8 @@ func (d Discord) Search(ctx context.Context, s *discordgo.Session, i *discordgo.
 		split[0] = strings.TrimSpace(split[0])
 		split[1] = strings.TrimSpace(split[1])
 		endpointSignature := strings.Split(split[1], " ")
+		var params, query []APIEndpointParameter
+		_ = query
 		var rendered string
 		current := ast.GetNextNode(visitor.ResultNode.GetParent())
 	stopCollectingAPIMethod:
@@ -268,6 +306,21 @@ func (d Discord) Search(ctx context.Context, s *discordgo.Session, i *discordgo.
 					"warn":   ":warning:",
 					"danger": ":octagonal_sign:",
 				})
+			case *ast.Heading:
+				if v.Level <= 6 {
+					switch strings.ToLower(string(ast.GetFirstChild(current).AsLeaf().Literal)) {
+					case "json params":
+						current = ast.GetNextNode(current)
+						table, ok := current.(*ast.Table)
+						if !ok {
+							continue stopCollectingAPIMethod
+						}
+						params = parseEndpointParams(table)
+						continue stopCollectingAPIMethod
+					}
+				} else {
+					break stopCollectingAPIMethod
+				}
 			default:
 				result = mdutil.RenderStringNode(current)
 				if result == "" {
@@ -277,12 +330,13 @@ func (d Discord) Search(ctx context.Context, s *discordgo.Session, i *discordgo.
 			rendered += result + "\n\n"
 			current = ast.GetNextNode(current)
 		}
-
+		// fmt.Println(rendered)
 		return APIEndpoint{
 			Name:        strings.TrimSpace(split[0]),
 			Description: rendered,
 			Method:      strings.ToUpper(endpointSignature[0]),
 			Endpoint:    d.encodeMDReferenceLinks(endpointSignature[1]),
+			Parameters:  params,
 			Link: discordDocsHeadingURL(
 				normalizeDiscordUrlParameter(options["topic"].StringValue()),
 				normalizeDiscordUrlParameter(options["page"].StringValue()),

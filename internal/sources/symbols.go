@@ -52,15 +52,17 @@ type APIEndpointParameter struct {
 	Name        string
 	Type        string
 	Description string
+	Additional  map[string]string
 }
 
 type APIEndpoint struct {
-	Name        string
-	Link        string
-	Method      string
-	Endpoint    string
-	Parameters  []APIEndpointParameter
-	Description string
+	Name            string
+	Link            string
+	Method          string
+	Endpoint        string
+	Parameters      []APIEndpointParameter
+	QueryParameters []APIEndpointParameter
+	Description     string
 }
 
 func (e APIEndpoint) GetName() string {
@@ -76,7 +78,23 @@ func (e APIEndpoint) Type() SymbolType {
 }
 
 func (e APIEndpoint) Render() (desc string, fields []*discordgo.MessageEmbedField) {
-	return fmt.Sprintf("**%s** %q\n\n%s", e.Method, e.Endpoint, e.Description), nil
+	params := ""
+	for _, param := range e.Parameters {
+		additional := ""
+		for name, value := range param.Additional {
+			additional += fmt.Sprintf("**%s**: %s\n", name, value)
+		}
+		params += fmt.Sprintf("**`%s`** - %s\n**Type**: %s\n%s\n", param.Name, param.Description, param.Type, additional)
+	}
+	desc = fmt.Sprintf("**%s** %q\n\n%s", e.Method, e.Endpoint, e.Description)
+	if params != "" {
+		// fields = append(fields, &discordgo.MessageEmbedField{
+		// 	Name:  "JSON Params",
+		// 	Value: params,
+		// })
+		desc += "**__JSON Params__**\n\n" + params
+	}
+	return desc, fields
 }
 
 type Paragraph struct {
